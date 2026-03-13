@@ -19,8 +19,11 @@ allow {robot_ip}
 1-2) robot 추가
 주석처리
 pool ntp.ubuntu.com        iburst maxsources 4
+
 pool 0.ubuntu.pool.ntp.org iburst maxsources 1
+
 pool 1.ubuntu.pool.ntp.org iburst maxsources 1
+
 pool 2.ubuntu.pool.ntp.org iburst maxsources 2
 
 server {master_pc_ip} iburst prefer
@@ -85,3 +88,4 @@ echo $?
  - 실제 teleop...py 코드가 있는 경로에 맞출 것
 
  - 경로 수정 할 부분 → script_path = Path.home() / "temp" / f"teleop_keyboard_{robot}.py"
+
