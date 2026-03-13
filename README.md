@@ -1,3 +1,7 @@
+need main.py
+from app.main_window import MainWindow
+
+
 <--------------------------------- xtgt_ui 폴더별 사용 --------------------------------->
 
 1. xtgt_ui_m00
@@ -14,6 +18,7 @@
 1-1) master pc 추가
 
 local stratum 10
+
 allow {robot_ip}
 
 1-2) robot 추가
@@ -88,4 +93,5 @@ echo $?
  - 실제 teleop...py 코드가 있는 경로에 맞출 것
 
  - 경로 수정 할 부분 → script_path = Path.home() / "temp" / f"teleop_keyboard_{robot}.py"
+
 
