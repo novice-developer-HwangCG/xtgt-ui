@@ -1,4 +1,5 @@
 need main.py
+
 from app.main_window import MainWindow
 
 
@@ -93,5 +94,6 @@ echo $?
  - 실제 teleop...py 코드가 있는 경로에 맞출 것
 
  - 경로 수정 할 부분 → script_path = Path.home() / "temp" / f"teleop_keyboard_{robot}.py"
+
 
 
