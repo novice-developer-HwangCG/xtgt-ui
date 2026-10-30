@@ -26,7 +26,7 @@ from PyQt5.QtGui import QPixmap, QIntValidator
     -- 0313 xtgt1_rtk_val       gps
     xtgt1_tcp_val       통신
     -- 0225 xtgt1_time_sync_val     시간
-    xtgt1_water_val     침수센서값 (pico)
+    -- 1026 xtgt1_water_val     침수센서값 (pico)
 
     xtgt1_bat_bar       배터리 adc
     xtgt1_stop_btn      비상정지
@@ -52,7 +52,7 @@ from PyQt5.QtGui import QPixmap, QIntValidator
     xtgt1_time_set_btn              시간 동기화
     -- 0225 xtgt1_debug_btn                 터미널창?
     [수정] common_wps_btn      waypoint 실행    (+++추가)
-    [수정] common_rviz_btn       Rviz 실행
+    [수정] common_rviz_btn       Rviz 실행      +++ 1026 추가 수정 변수 값은 그대로 두고 보여지는 UI 만 수정, 라벨 = Map / 버튼 = Map Run, Map Exit으로 변경
     [수정] common_mapviz_btn     Mapbiz 실행    0304 update 버튼은 남겨두고 비활성화 시키기 사용 하지 않음
 
     [수정] xtgt1_run_btn → xtgt1_auto_run_btn               자율 주행 bringup 실행
@@ -78,6 +78,13 @@ from PyQt5.QtGui import QPixmap, QIntValidator
     0417 수정
     ++ spd_cb       속도 단위 선택  (default 값 m/s, combo box 리스트 m/s, km/h, mph)
     ++ spd_apply_btn        속도 단위 적용
+
+    0922 수정
+    -- auto_set_btn     auto 모드 설정 용 버튼 (기본은 회전이동 모드, 누르면 전후진이동 모드)
+
+    1012 수정
+    ++ datum_combo_box      gps datum 좌표 선택 콤보 박스
+    ++ datum_set_btn        gps datum 좌표 설정
 """
 
 class MainWindow(QMainWindow):
@@ -101,9 +108,14 @@ class MainWindow(QMainWindow):
         # self.hit_log_buf = {r: [] for r in self.robot_num}
         
         self.master_ip = "192.168.0.110"
+        self.master_domain_id = 10
+        self.robot_domain_id = {"xtgt1": 11, "xtgt2": 12}
+        # GUI의 ROS 워커가 rclpy.init()을 호출하기 전에 PC 도메인을 지정
+        os.environ["ROS_DOMAIN_ID"] = str(self.master_domain_id)
+        # 도메인 10 <-> 11, 10 <-> 12 통신은 별도로 구성한 브릿지가 담당?
         self.robot_ip = {"xtgt1": "192.168.0.111", "xtgt2": "192.168.0.112"}
         self.robot_pw = {"xtgt1": "0000", "xtgt2": "0000"}
-        self.robot_user = {"xtgt1": "m1", "xtgt2": "m2"}     # 로봇의 topic name은 xtgt1, xtgt2, 실제 sbc명은 m1, m2 xtgt1 = m1, xtgt2 = m2
+        self.robot_user = {"xtgt1": "m1", "xtgt2": "m2"}     # 로봇의 topic name은 xtgt1, xtgt2, 실제 sbc명은 m1, m2 / xtgt1 = m1, xtgt2 = m2
         self.ssh_port = 22
         # 로봇별 sync 상태: 0=idle, 1=syncing, 2=done, 3=fail
         self.sync_state = {r: 0 for r in self.robot_num}
@@ -128,7 +140,7 @@ class MainWindow(QMainWindow):
         self.lidar_log_lines = []
         self.lidar_log_dir = Path.home() / "Desktop" / "logs" / "Lidar_logs"
         self.lidar_log_started_at = datetime.now().strftime("%y%m%d_%H%M")
-
+        
         self.wps_proc = None
         self.rviz_proc = None
 
@@ -144,6 +156,10 @@ class MainWindow(QMainWindow):
         self.ch2 = 0
         self.ch3 = 0
         self.selected_spd_unit = "m/s"
+
+        self.auto_set = 0
+        self.applied_datum = "47교장"  # datum_btn으로 적용, 콤보박스 선택했다고 바로 적용되지는 않음
+        self.datum_local_codes = {"47교장": "g", "3여단": "i"}
 
         self.buttons = {}
         self.Progressbars = {}
@@ -185,7 +201,7 @@ class MainWindow(QMainWindow):
                 f"{robot_num}_rssi_val",
                 f"{robot_num}_tcp_val",
                 f"{robot_num}_rtk_val",
-                f"{robot_num}_water_val",
+                #f"{robot_num}_water_val",
                 f"{robot_num}_mnq_img_lbl",
                 f"{robot_num}_hit_time_lbl",
                 f"{robot_num}_hit_num_lbl",
@@ -215,7 +231,10 @@ class MainWindow(QMainWindow):
             "common_rviz_btn",
             "common_hit_save_btn",
             "hit_apply_btn",
-            "spd_apply_btn"
+            "spd_apply_btn",
+            "auto_set_btn",
+            # "ap_btn"
+            "datum_btn"
         ]
 
         for obj_name in common_set:
@@ -227,6 +246,10 @@ class MainWindow(QMainWindow):
         self.spd_cb = self.findChild(QComboBox, "spd_cb")
         if self.spd_cb is None:
             raise RuntimeError("ComboBox not found : object name='spd_cb'")
+
+        self.datum_combo_box = self.findChild(QComboBox, "datum_combo_box")
+        if self.datum_combo_box is None:
+            raise RuntimeError("ComboBox not found : object name='datum_combo_box'")
 
         self.critical_edit = self.findChild(QLineEdit, "critical_val")
         if self.critical_edit is None:
@@ -291,7 +314,7 @@ class MainWindow(QMainWindow):
         self.common["common_wps_btn"].setText("WPS Exit" if checked else "WPS Run")
 
     def set_toggle_text_rviz(self, checked: bool):
-        self.common["common_rviz_btn"].setText("RViz Exit" if checked else "RViz Run")
+        self.common["common_rviz_btn"].setText("Map Exit" if checked else "Map Run")
 
     def set_toggle_text_ch_ignore(self, btn: QPushButton, checked: bool):
         btn.setText("On" if checked else "Off")
@@ -323,6 +346,13 @@ class MainWindow(QMainWindow):
         with QSignalBlocker(btn):
             btn.setChecked(False)
         set_text_fn(btn, False)
+
+    # auto 모드 변경 기본 전후진이동(고정), 버튼 눌리면 회전이동(일반)
+    def set_toggle_auto_mode(self, btn: QPushButton, checked: bool):
+        btn.setText("일반모드" if checked else "고정모드")
+
+    # def set_toggle_ap_mode(self, btn: QPushButton, checked: bool):
+    #     btn.setText("Off" if checked else "On")
 
     def connect_signals_and_init(self):
         for robot in self.robot_num:
@@ -389,16 +419,35 @@ class MainWindow(QMainWindow):
         #rtk_set_btn = self.common["common_rtk_base_btn"]
         self.hit_apply_btn = self.common["hit_apply_btn"]
         spd_apply_btn = self.common["spd_apply_btn"]
+        auto_set_btn = self.common["auto_set_btn"]
+        datum_btn = self.common["datum_btn"]
+        #ap_set_btn = self.common["ap_btn"]
 
         self.spd_cb.clear()
         self.spd_cb.addItems(["m/s", "km/h", "mph"])
         self.spd_cb.setCurrentText("m/s")   # default
 
+        self.datum_combo_box.clear()
+        self.datum_combo_box.setEditable(False)
+        self.datum_combo_box.addItems(["47교장", "3여단"])
+        self.datum_combo_box.setCurrentText(self.applied_datum)   # default = 47
+
         waypoint_btn.setCheckable(True)
         rviz_btn.setCheckable(True)
         hit_save_btn.setCheckable(False)
         self.hit_apply_btn.setCheckable(False)
+        datum_btn.setCheckable(False)
         
+        # auto mode 설정 버튼
+        auto_set_btn.setCheckable(True)
+        auto_set_btn.setChecked(False)       # 기본값 = 회전이동
+        self.set_toggle_auto_mode(auto_set_btn, auto_set_btn.isChecked())
+
+        # auto mode 설정 버튼
+        # ap_set_btn.setCheckable(True)
+        # ap_set_btn.setChecked(False)
+        # self.set_toggle_ap_mode(ap_set_btn, ap_set_btn.isChecked())
+
         self.set_toggle_text_wps(waypoint_btn.isChecked())
         self.set_toggle_text_rviz(rviz_btn.isChecked())
 
@@ -410,6 +459,8 @@ class MainWindow(QMainWindow):
         hit_save_btn.clicked.connect(lambda _=False: self.save_hit_log())
         self.spd_cb.currentTextChanged.connect(self.spd_unit_set)
         spd_apply_btn.clicked.connect(self.spd_unit_apply)
+        auto_set_btn.toggled.connect(self.auto_mode_set)
+        datum_btn.clicked.connect(self.datum_set)
 
     # ==================== ssh helper ====================
     def ssh_exec(self, robot: str, cmd: str, timeout: int = 10, sudo: bool = False):
@@ -454,18 +505,65 @@ class MainWindow(QMainWindow):
         sb = self.logbox_text.verticalScrollBar()
         sb.setValue(sb.maximum())
 
+    # ==================== AP connection set ====================
+    # def ap_mode_set(self, checked: bool):
+    #     ap_set_btn = self.common["ap_btn"]
+    # 명령어 mater pc에 wi 실행, ~/.bashrc 파일에 저장된 명령어 alias wi="sudo nmcli dev wifi hotspot ifname wlp1s0 ssid m0 password 'esad13524'"
+
+    # ==================== Datum set ====================
+    def datum_set(self):
+        selected_datum = self.datum_combo_box.currentText().strip()
+        if selected_datum not in self.datum_local_codes:
+            QMessageBox.warning(self, "Mapping 설정", "47교장 또는 3여단을 선택하세요")
+            return
+
+        self.applied_datum = selected_datum
+        #self.logbox_text.appendPlainText(f"[Datum] {self.applied_datum} 적용: 다음 Auto Run부터 사용")
+
+    def build_auto_launch_command(self, robot: str):
+        if robot not in self.robot_num:
+            raise ValueError(f"알 수 없는 로봇: {robot}")
+
+        local_code = self.datum_local_codes.get(self.applied_datum)
+        if local_code is None:
+            raise ValueError("적용할 Mapping을 47교장 또는 3여단으로 설정하세요")
+
+        mode_code = "f" if self.auto_set == 1 else "r"
+        return (
+            f"ros2 launch main_xtgt main_launch.py ns:={robot} "
+            f"mode:={mode_code} local:={local_code}"
+        )
+
+    # ==================== auto mode set ====================
+    def auto_mode_set(self, checked: bool):
+        auto_set_btn = self.common["auto_set_btn"]
+
+        if checked:
+            # 전후진 이동 모드 (고정)
+            self.auto_set = 1
+        else:
+            # 기본 회전 이동 모드 (일반)
+            self.auto_set = 0
+
+        self.set_toggle_auto_mode(auto_set_btn, checked)
+
     # ==================== bringup ====================
     def auto_bringup_run(self, robot: str):
+        # 수정 필요 도메인 id 분리 됨 M1(M10-M) = 11, M2(M10-T) = 1
         # # Run -> Running (토글 아님, 한번 누르면 유지)
         if self.running.get(robot, False):
             return
 
-        launch_cmd = "ros2 launch main_xtgt main_launch.py"
-        # launch_cmd = "ros2 launch main_xtgt main_launch.py rtk:=n"
+        try:
+            launch_cmd = self.build_auto_launch_command(robot)
+            robot_domain_id = self.robot_domain_id[robot]
+        except (ValueError, KeyError) as e:
+            QMessageBox.warning(self, "Auto_Run 설정 확인", str(e))
+            return
 
         pidfile = self.bringup_pidfile[robot]["auto"]
         logfile = self.bringup_logfile[robot]["auto"]
-
+        
         remote_cmd = f"""
             pidfile="{pidfile}"
             logfile="{logfile}"
@@ -483,17 +581,18 @@ class MainWindow(QMainWindow):
             bash -lc '
                 source /opt/ros/humble/setup.bash;
                 source ~/ros2_ws/install/setup.bash 2>/dev/null || true;
-                export ROS_DOMAIN_ID=10;
-                export ROS_DISCOVERY_SERVER={self.master_ip}:11811;
+                export ROS_DOMAIN_ID={robot_domain_id};
                 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp;
-                echo "[ENV] ROS_DOMAIN_ID=$ROS_DOMAIN_ID ROS_DISCOVERY_SERVER=$ROS_DISCOVERY_SERVER" >> "{logfile}";
-                setsid {launch_cmd} > "{logfile}" 2>&1 < /dev/null &
+                echo "[ENV] ROS_DOMAIN_ID=$ROS_DOMAIN_ID RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION" >> "{logfile}";
+                echo "[LAUNCH] {launch_cmd}" >> "{logfile}";
+                setsid {launch_cmd} >> "{logfile}" 2>&1 < /dev/null &
                 echo $! > "{pidfile}";
                 disown || true
             '
             """
 
         try:
+            #self.logbox_text.appendPlainText(f"Auto_Run: {robot}")
             out, err = self.ssh_exec(robot, remote_cmd, timeout=10)
 
             chk_out, chk_err = self.bringup_check(robot, "auto")
@@ -527,7 +626,9 @@ class MainWindow(QMainWindow):
         if self.running.get(robot, False):
             return
 
-        launch_cmd = f"ros2 launch xtgt_bringup xtgt_bringup_launch.py ns:={robot}"
+        robot_domain_id = self.robot_domain_id[robot]
+        # 수동은 mode 없이 일반 실행 (자율목적 아님)
+        launch_cmd = f"ros2 launch main_xtgt main_launch.py ns:={robot}"
 
         pidfile = self.bringup_pidfile[robot]["manual"]
         logfile = self.bringup_logfile[robot]["manual"]
@@ -549,11 +650,10 @@ class MainWindow(QMainWindow):
             bash -lc '
                 source /opt/ros/humble/setup.bash;
                 source ~/ros2_ws/install/setup.bash 2>/dev/null || true;
-                export ROS_DOMAIN_ID=10;
-                export ROS_DISCOVERY_SERVER={self.master_ip}:11811;
+                export ROS_DOMAIN_ID={robot_domain_id};
                 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp;
-                echo "[ENV] ROS_DOMAIN_ID=$ROS_DOMAIN_ID ROS_DISCOVERY_SERVER=$ROS_DISCOVERY_SERVER" >> "{logfile}";
-                setsid {launch_cmd} > "{logfile}" 2>&1 < /dev/null &
+                echo "[ENV] ROS_DOMAIN_ID=$ROS_DOMAIN_ID RMW_IMPLEMENTATION=$RMW_IMPLEMENTATION" > "{logfile}";
+                setsid {launch_cmd} >> "{logfile}" 2>&1 < /dev/null &
                 echo $! > "{pidfile}";
                 disown || true
             '
@@ -718,7 +818,11 @@ class MainWindow(QMainWindow):
     def stop_common_processes(self):
         if self.wps_proc is not None and self.wps_proc.poll() is None:
             try:
-                os.killpg(os.getpgid(self.wps_proc.pid), signal.SIGTERM)
+                # XTGT_FIX_WPS_EXIT_20260707
+                # os.killpg(os.getpgid(self.wps_proc.pid), signal.SIGTERM)
+                os.killpg(os.getpgid(self.wps_proc.pid), getattr(signal, "SIGKILL", signal.SIGTERM))
+            except ProcessLookupError:
+                pass
             except Exception:
                 pass
         self.wps_proc = None
@@ -741,7 +845,7 @@ class MainWindow(QMainWindow):
         unit = self.spd_cb.currentText()
         #print(f"spd apply {unit}")
 
-        # 실제 적용 코드는 나중에
+        # 실제 적용 코드는 여기서 안함
         pass
 
     # ==================== lidar ====================
@@ -930,9 +1034,9 @@ class MainWindow(QMainWindow):
     def stop(self, robot: str, checked: bool):
         self.set_toggle_text_stop(self.buttons[f"{robot}_stop_btn"], checked)
 
-    # ==================== common set (waypoint / rviz) ====================
+    # ==================== common set (waypoint / map[Rviz]) ====================
     def common_set_ui(self):
-        """로봇 실행 상태(self.running)에 따라 공통(WPS/RViz) 버튼을 제어"""
+        """로봇 실행 상태(self.running)에 따라 공통(WPS/Map[Rviz]) 버튼을 제어"""
         any_running = any(self.running.values())
 
         wps_btn  = self.common["common_wps_btn"]
@@ -978,7 +1082,11 @@ class MainWindow(QMainWindow):
         else:
             if self.wps_proc is not None and self.wps_proc.poll() is None:
                 try:
-                    os.killpg(os.getpgid(self.wps_proc.pid), signal.SIGTERM)
+                    # XTGT_FIX_WPS_EXIT_20260707
+                    # os.killpg(os.getpgid(self.wps_proc.pid), signal.SIGTERM)
+                    os.killpg(os.getpgid(self.wps_proc.pid), getattr(signal, "SIGKILL", signal.SIGTERM))
+                except ProcessLookupError:
+                    pass
                 except Exception as e:
                     QMessageBox.warning(self, "WPS Exit Error", str(e))
                 self.wps_proc = None
@@ -1001,7 +1109,7 @@ class MainWindow(QMainWindow):
                         preexec_fn=os.setsid
                     )
                 except Exception as e:
-                    QMessageBox.warning(self, "RViz Run Error", str(e))
+                    QMessageBox.warning(self, "Map Run Error", str(e))
                     rviz_btn.blockSignals(True)
                     rviz_btn.setChecked(False)
                     rviz_btn.blockSignals(False)
@@ -1011,7 +1119,7 @@ class MainWindow(QMainWindow):
                 try:
                     os.killpg(os.getpgid(self.rviz_proc.pid), signal.SIGTERM)
                 except Exception as e:
-                    QMessageBox.warning(self, "RViz Exit Error", str(e))
+                    QMessageBox.warning(self, "Map Exit Error", str(e))
                 self.rviz_proc = None
 
     # ==================== Mapviz ====================
@@ -1220,7 +1328,7 @@ class BringupWorker(QObject):
                 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp;
                 
                 echo "[ENV] ROS_DOMAIN_ID=$ROS_DOMAIN_ID ROS_DISCOVERY_SERVER=$ROS_DISCOVERY_SERVER RMW=$RMW_IMPLEMENTATION" >> "{logfile}";
-                setsid {launch_cmd} > "{logfile}" 2>&1 < /dev/null &
+                setsid {launch_cmd} >> "{logfile}" 2>&1 < /dev/null &
                 echo $! > "{pidfile}";
                 disown || true
             '
@@ -1255,7 +1363,7 @@ class TimeSyncWorker(QObject):
                     return parts[0], line, text  # ms, master_line, full_sources
         return None, "", text
 
-    def wait_master_selected(self, ssh, retries=30, delay_sec=0.5):
+    def wait_master_selected(self, ssh, retries=120, delay_sec=1.0):
         last_ms, last_line, last_full = None, "", ""
         for _ in range(retries):
             ms, line, full = self.get_master_mark(ssh)
@@ -1283,10 +1391,10 @@ class TimeSyncWorker(QObject):
             )
 
             # 먼저 "이미 마스터 ^*"인지 빠르게 확인
-            ok_master, master_detail, sources_full = self.wait_master_selected(ssh, retries=3, delay_sec=0.3)
+            ok_master, master_detail, sources_full = self.wait_master_selected(ssh, retries=30, delay_sec=1.0)
             if ok_master:
                 # 이미 붙어있으면 명령 실행 없이 성공 처리
-                _, t_out, _ = ssh.exec_command("timeout 3 chronyc tracking | head -n 5 || true", timeout=8)
+                _, t_out, _ = ssh.exec_command("timeout 3 chronyc tracking | head -n 5 || true", timeout=16)
                 tracking = t_out.read().decode("utf-8", errors="ignore").strip()
                 final_out = f"[ALREADY SYNCED]\n{master_detail}\n\n[TRACKING]\n{tracking}"
                 self.finished.emit(self.robot, True, final_out, "")
@@ -1294,7 +1402,7 @@ class TimeSyncWorker(QObject):
 
             # 아직 ^* 아니면 동기화 명령 실행
             cmd_sync = "sudo -n /usr/local/sbin/time-sync-now"
-            _, o1, e1 = ssh.exec_command(cmd_sync, timeout=20)
+            _, o1, e1 = ssh.exec_command(cmd_sync, timeout=60)
             rc1 = o1.channel.recv_exit_status()
             out1 = o1.read().decode("utf-8", errors="ignore").strip()
             err1 = e1.read().decode("utf-8", errors="ignore").strip()
